@@ -2508,22 +2508,22 @@ class FileToolsPage(QWidget):
         self.tab1 = FolderCreatorTab(self.config)
         self.tab2 = FileCollectExtractTab(self.config)
         self.tab3 = ImageToFolderTab(self.config)
-        self.tab4 = FileListExportTab(self.config)
-        self.tab5 = FileDistributeTab(self.config)
-        self.tab6 = SupplierCodeTab(self.config)
-        self.tab7 = DedupCleanerTab(self.config)
-        self.tab8 = MergeTablesTab(self.config)
+        self.tab4 = FileDistributeTab(self.config)
+        self.tab5 = SupplierCodeTab(self.config)
+        self.tab6 = MergeTablesTab(self.config)
+        self.tab7 = FileListExportTab(self.config)
+        self.tab8 = DedupCleanerTab(self.config)
 
         # 包裹到 QScrollArea
         for tab, name in [
             (self.tab1, "📁 批量建文件夹"),
             (self.tab2, "📦 提取文件汇总"),
             (self.tab3, "🖼️ 图片归入同名文件夹"),
-            (self.tab4, "📋 导出文件清单"),
-            (self.tab5, "📨 批量分发文件"),
-            (self.tab6, "🔖 供应商款号提取"),
-            (self.tab7, "🧹 清理重复文件"),
-            (self.tab8, "📊 批量合并表格"),
+            (self.tab4, "📨 批量分发文件"),
+            (self.tab5, "🔖 供应商款号提取"),
+            (self.tab6, "📊 批量合并表格"),
+            (self.tab7, "📋 导出文件清单"),
+            (self.tab8, "🧹 清理重复文件"),
         ]:
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
