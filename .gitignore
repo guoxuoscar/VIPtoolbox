@@ -1,0 +1,45 @@
+# === 敏感配置（含 API Key / Token）===
+baidu_api.json
+toolbox_config.json
+proxies.txt
+ocr_tier.txt
+
+# === 日志 ===
+*.log
+logs/
+
+# === Python 缓存 ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# === 浏览器缓存 / 用户数据 ===
+.tb_profile/
+.first_run_done
+.download_history.json
+
+# === 大体积模型文件（需用户自行下载） ===
+u2net.onnx
+
+# === OCR 引擎（第三方二进制，体积大） ===
+toolbox/ocr_engine/
+
+# === 下载生成的图片目录 ===
+下载的商品图片/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === Windows ===
+Thumbs.db
+Desktop.ini
+
+# === 打包输出 ===
+dist/
+build/
+*.spec
