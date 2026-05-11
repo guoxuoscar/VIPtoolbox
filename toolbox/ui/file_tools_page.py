@@ -1755,9 +1755,10 @@ class MergeTablesTab(QWidget):
         super().__init__(parent)
         self.config = config
         self.log_signal.connect(self._append_log)
-        self.progress_signal.connect(self.progress_bar.setValue)
         self._file_paths = []
         self.init_ui()
+        # progress_bar 在 init_ui 中创建，信号在之后连接
+        self.progress_signal.connect(self.progress_bar.setValue)
 
     def _append_log(self, msg):
         self.log_area.append(msg)
