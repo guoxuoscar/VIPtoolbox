@@ -630,6 +630,7 @@ def generate_batch_add_template(erp_rows: List[ErpRow], sel_lookup: Dict[str, Se
     idx_sku = _find_col_index(tpl_headers, '款号')
     idx_huohao = _find_col_index(tpl_headers, '货号')
     idx_barcode = _find_col_index(tpl_headers, '条形码')
+    idx_product_name = _find_col_index(tpl_headers, '商品名称')
     idx_category = _find_col_index(tpl_headers, '商品类目')
     idx_custom_size = _find_col_index(tpl_headers, '自定义尺码')
     idx_custom_color = _find_col_index(tpl_headers, '自定义颜色')
@@ -664,6 +665,12 @@ def generate_batch_add_template(erp_rows: List[ErpRow], sel_lookup: Dict[str, Se
             new_row[idx_huohao] = row_data.唯品货号
         if idx_barcode >= 0:
             new_row[idx_barcode] = row_data.唯品条码
+        if idx_product_name >= 0:
+            # 从选款资料表匹配标题作为商品名称，超长自动截断
+            name = row_data.商品名称 or ''
+            if len(name) > MAX_NAME_LEN:
+                name = name[:MAX_NAME_LEN]
+            new_row[idx_product_name] = name
         if idx_category >= 0:
             new_row[idx_category] = row_data.商品类目
         if idx_custom_size >= 0:
