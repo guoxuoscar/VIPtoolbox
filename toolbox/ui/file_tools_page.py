@@ -251,22 +251,42 @@ class FolderCreatorTab(QWidget):
 
 
 # ── Tab 2: 提取文件汇总（按文件夹名匹配） ──────────────────────
+# 自定义模板常用预设
+TEMPLATE_PRESETS = [
+    ("款号_原文件名", "{parent}_{name}{ext}"),
+    ("款号_序号", "{parent}_{num:04d}{ext}"),
+    ("匹配文件夹_款号_原文件", "{matched}_{parent}_{name}{ext}"),
+    ("父文件/原文件", "{parent}/{name}{ext}"),
+    ("匹配/款号_原文件", "{matched}/{parent}_{name}{ext}"),
+]
+
+
 class FileCollectExtractTab(QWidget):
     """按文件夹名匹配目标文件夹，提取其中文件，支持多种输出结构和命名规则。"""
     log_signal = Signal(str)
 
     FOLDER_PRESETS = ["SKU", "详情页", "详情图片", "主图", "白底图", "透明图", "视频", "素材图"]
     OUTPUT_MODES = [
-        ("按父文件夹归类", "parent", "如: GZ001/front.jpg"),
-        ("按匹配文件夹归类", "matched", "如: SKU/GZ001_front.jpg"),
-        ("父文件夹/匹配文件夹 双层", "both", "如: GZ001/SKU/front.jpg"),
-        ("扁平汇总(全部放一起)", "flat", "如: GZ001_SKU_front.jpg"),
+        ("款号文件夹归类 → 父文件夹名/原文件", "parent",
+         "如: GZ001/front.jpg"),
+        ("匹配文件夹归类 → 匹配文件夹名/原文件", "matched",
+         "如: SKU/front.jpg"),
+        ("匹配文件夹/款号 双层 → 匹配文件夹/父文件夹/文件", "matched_parent",
+         "如: SKU/GZ001/front.jpg"),
+        ("款号/匹配文件夹 双层 → 父文件夹/匹配文件夹/文件", "both",
+         "如: GZ001/SKU/front.jpg"),
+        ("扁平汇总 → 全部放同一目录", "flat",
+         "如: GZ001_front.jpg 全部混放"),
     ]
     NAMING_MODES = [
-        ("保持原文件名", "original", "{name}{ext}"),
-        ("父文件夹_原文件名", "parent_name", "{parent}_{name}{ext}"),
-        ("父文件夹_序号", "parent_num", "{parent}_{num:04d}{ext}"),
-        ("匹配文件夹_父文件夹_原文件名", "matched_parent_name", "{matched}_{parent}_{name}{ext}"),
+        ("保持原文件名", "original",
+         "{name}{ext}  → 如 front.jpg"),
+        ("父文件夹_原文件名", "parent_name",
+         "{parent}_{name}{ext}  → 如 GZ001_front.jpg"),
+        ("父文件夹_序号", "parent_num",
+         "{parent}_{num:04d}{ext}  → 如 GZ001_0001.jpg"),
+        ("匹配文件夹_父文件夹_原文件名", "matched_parent_name",
+         "{matched}_{parent}_{name}{ext}  → 如 SKU_GZ001_front.jpg"),
         ("自定义模板", "custom", ""),
     ]
 
@@ -281,6 +301,76 @@ class FileCollectExtractTab(QWidget):
         bar = self.log_area.verticalScrollBar()
         if bar:
             bar.setValue(bar.maximum())
+
+    def _build_preview_text(self) -> str:
+        """根据当前下拉选项，生成结构预览文本"""
+        struct = self.struct_combo.currentData()
+        naming = self.name_combo.currentData()
+        template = self.custom_template.text().strip() if naming == "custom" else ""
+
+        # 示例数据
+        parents = ["GZ001", "GZ002"]
+        matched = "SKU"
+        files = ["front.jpg", "back.jpg"]
+
+        def _make_name(p, m, f):
+            name_no_ext = os.path.splitext(f)[0]
+            ext = os.path.splitext(f)[1]
+            if naming == "original":
+                return f
+            elif naming == "parent_name":
+                return f"{p}_{f}"
+            elif naming == "parent_num":
+                return f"{p}_0001{ext}"
+            elif naming == "matched_parent_name":
+                return f"{m}_{p}_{f}"
+            elif naming == "custom" and template:
+                return template.replace("{parent}", p).replace("{matched}", m) \
+                    .replace("{name}", name_no_ext).replace("{ext}", ext) \
+                    .replace("{num}", "1").replace("{num:04d}", "0001")
+            return f
+
+        lines = ["📂 output/"]
+        for i_p, p in enumerate(parents):
+            # 确定子目录结构
+            if struct == "parent":
+                sub = p
+            elif struct == "matched":
+                sub = matched
+            elif struct == "matched_parent":
+                sub = f"{matched}/{p}"
+            elif struct == "both":
+                sub = f"{p}/{matched}"
+            else:  # flat
+                sub = ""
+
+            is_last_parent = i_p == len(parents) - 1
+
+            if sub:
+                parts = sub.split("/")
+                for d, part in enumerate(parts):
+                    is_last_part = d == len(parts) - 1
+                    prefix = "   " * d
+                    branch = "   └─ " if (is_last_parent and is_last_part) else "   ├─ "
+                    lines.append(f"{prefix}{branch}📂 {part}/")
+                for j, f in enumerate(files):
+                    base_prefix = "   " * len(parts)
+                    branch = "   └─ " if (is_last_parent and j == len(files) - 1) else "   ├─ "
+                    lines.append(f"{base_prefix}{branch}{_make_name(p, matched, f)}")
+            else:
+                for j, f in enumerate(files):
+                    branch = "   └─ " if (is_last_parent and j == len(files) - 1) else "   ├─ "
+                    lines.append(f"{branch}{_make_name(p, matched, f)}")
+
+        lines.append("")
+        lines.append(f"💡 示例: 勾选了 {len(parents)} 个款号, 匹配 {matched} 文件夹")
+        lines.append("   实际结果取决于源文件夹结构")
+        return "\n".join(lines)
+
+    def _update_preview(self):
+        """刷新右侧结构预览"""
+        text = self._build_preview_text()
+        self.preview_label.setText(text)
 
     def init_ui(self):
         layout = QVBoxLayout()
@@ -352,60 +442,133 @@ class FileCollectExtractTab(QWidget):
         filter_row.addWidget(self.kw_input, 1)
         layout.addLayout(filter_row)
 
-        # 输出结构
+        # ===== 输出结构 & 命名规则（左右布局） =====
         out_group = QGroupBox("📂 输出结构 & ✏️ 命名规则")
         out_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
-        out_layout = QVBoxLayout()
-        out_layout.setSpacing(8)
+        out_horiz = QHBoxLayout()
+        out_horiz.setSpacing(16)
+
+        # ── 左侧: 控件 ──
+        left_col = QVBoxLayout()
+        left_col.setSpacing(8)
 
         # 输出结构
         struct_row = QHBoxLayout()
         struct_row.addWidget(QLabel("输出结构:"))
         self.struct_combo = QComboBox()
         for label, val, hint in self.OUTPUT_MODES:
-            self.struct_combo.addItem(f"{label} ({hint})", val)
+            self.struct_combo.addItem(f"{label}", val)
         prev_struct = self.config.get("file_collect_struct", "parent")
         for k in range(self.struct_combo.count()):
             if self.struct_combo.itemData(k) == prev_struct:
                 self.struct_combo.setCurrentIndex(k)
                 break
+        self.struct_combo.currentIndexChanged.connect(self._update_preview)
         struct_row.addWidget(self.struct_combo, 1)
-        out_layout.addLayout(struct_row)
+
+        # 结构模式提示
+        self.struct_hint = QLabel("")
+        self.struct_hint.setStyleSheet("color: #999; font-size: 9px;")
+        struct_row.addWidget(self.struct_hint, 1)
+
+        def _show_struct_hint(idx):
+            _, _, hint = self.OUTPUT_MODES[idx]
+            self.struct_hint.setText(hint)
+        self.struct_combo.currentIndexChanged.connect(_show_struct_hint)
+        left_col.addLayout(struct_row)
 
         # 命名规则
         name_row = QHBoxLayout()
         name_row.addWidget(QLabel("命名规则:"))
         self.name_combo = QComboBox()
         for label, val, hint in self.NAMING_MODES:
-            text = f"{label} ({hint})" if hint else label
-            self.name_combo.addItem(text, val)
+            self.name_combo.addItem(label, val)
         prev_name = self.config.get("file_collect_naming", "original")
         for k in range(self.name_combo.count()):
             if self.name_combo.itemData(k) == prev_name:
                 self.name_combo.setCurrentIndex(k)
                 break
         self.name_combo.currentIndexChanged.connect(self._on_naming_changed)
+        self.name_combo.currentIndexChanged.connect(self._update_preview)
         name_row.addWidget(self.name_combo, 1)
-        out_layout.addLayout(name_row)
 
-        # 自定义模板
+        # 命名规则提示
+        self.naming_hint = QLabel("")
+        self.naming_hint.setStyleSheet("color: #999; font-size: 9px;")
+        name_row.addWidget(self.naming_hint, 1)
+
+        def _show_naming_hint(idx):
+            _, _, hint = self.NAMING_MODES[idx]
+            self.naming_hint.setText(hint)
+        self.name_combo.currentIndexChanged.connect(_show_naming_hint)
+        left_col.addLayout(name_row)
+
+        # 自定义模板 + 预设按钮
         templ_row = QHBoxLayout()
         templ_row.addWidget(QLabel("自定义模板:"))
         self.custom_template = QLineEdit()
         self.custom_template.setPlaceholderText("变量: {parent} {matched} {name} {ext} {num}")
         self.custom_template.setText(self.config.get("file_collect_template", "{parent}_{matched}_{name}{ext}"))
+        self.custom_template.textChanged.connect(self._update_preview)
         templ_row.addWidget(self.custom_template, 1)
-        out_layout.addLayout(templ_row)
+        left_col.addLayout(templ_row)
 
-        hint = QLabel("💡 {parent}=父文件夹名  {matched}=匹配文件夹名  {name}=原文件名(无扩展名)  {ext}=扩展名  {num}=自动序号")
-        hint.setStyleSheet("color: #999; font-size: 9px;")
-        out_layout.addWidget(hint)
-        out_group.setLayout(out_layout)
+        # 模板预设按钮行
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(4)
+        preset_row.addWidget(QLabel("常用模板:"))
+        for label, tpl in TEMPLATE_PRESETS:
+            btn = QPushButton(label)
+            btn.setFixedHeight(24)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: #E8F5E9; color: #2E7D32; border: 1px solid #A5D6A7;
+                    border-radius: 4px; padding: 2px 8px; font-size: 9px; font-weight: normal;
+                }
+                QPushButton:hover { background: #C8E6C9; }
+            """)
+            btn.clicked.connect(lambda checked, t=tpl: self._apply_template(t))
+            preset_row.addWidget(btn)
+        preset_row.addStretch()
+        left_col.addLayout(preset_row)
 
-        self._on_naming_changed()
+        # 变量说明
+        hint = QLabel(
+            "💡 {parent}=父文件夹名(款号)  {matched}=匹配文件夹名(SKU)  "
+            "{name}=原文件名(无后缀)  {ext}=扩展名  {num}=序号"
+        )
+        hint.setStyleSheet("color: #888; font-size: 9px;")
+        hint.setWordWrap(True)
+        left_col.addWidget(hint)
+
+        out_horiz.addLayout(left_col, 3)
+
+        # ── 右侧: 结构预览 ──
+        preview_frame = QGroupBox("📐 结构预览")
+        preview_frame.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
+        preview_frame.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #C8E6C9; border-radius: 8px; margin-top: 10px;
+                background: #F1F8E9; font-family: Microsoft YaHei; font-size: 10px;
+                font-weight: bold; color: #2E7D32; padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin; left: 10px; padding: 0 6px;
+            }
+        """)
+        preview_vl = QVBoxLayout(preview_frame)
+        preview_vl.setContentsMargins(8, 8, 8, 8)
+        self.preview_label = QLabel()
+        self.preview_label.setFont(QFont("Consolas", 9))
+        self.preview_label.setStyleSheet("color: #333; background: transparent;")
+        self.preview_label.setWordWrap(False)
+        preview_vl.addWidget(self.preview_label)
+        out_horiz.addWidget(preview_frame, 2)
+
+        out_group.setLayout(out_horiz)
         layout.addWidget(out_group)
 
-        # 输出目录
+        # ===== 输出目录 & 运行 =====
         outdir_row = QHBoxLayout()
         outdir_row.addWidget(QLabel("输出目录:"))
         self.output_dir = DirDropLineEdit("汇总输出位置...")
@@ -435,6 +598,21 @@ class FileCollectExtractTab(QWidget):
         layout.addWidget(self.log_area)
         layout.addStretch()
         self.setLayout(layout)
+
+        # 初始状态
+        self._on_naming_changed()
+        _show_struct_hint(self.struct_combo.currentIndex())
+        _show_naming_hint(self.name_combo.currentIndex())
+        self._update_preview()
+
+    def _apply_template(self, tpl: str):
+        """点击模板预设按钮时填入自定义模板"""
+        self.custom_template.setText(tpl)
+        # 自动切换到"自定义模板"命名模式
+        for k in range(self.name_combo.count()):
+            if self.name_combo.itemData(k) == "custom":
+                self.name_combo.setCurrentIndex(k)
+                break
 
     def _browse_src(self):
         path = QFileDialog.getExistingDirectory(self, "选择源文件夹")
@@ -544,6 +722,8 @@ class FileCollectExtractTab(QWidget):
                         dest_sub = parent
                     elif struct == "matched":
                         dest_sub = matched
+                    elif struct == "matched_parent":
+                        dest_sub = os.path.join(matched, parent)
                     elif struct == "both":
                         dest_sub = os.path.join(parent, matched)
                     else:  # flat
