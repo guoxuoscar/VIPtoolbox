@@ -1,19 +1,21 @@
 # 唯品上新工具箱
 
-电商运营辅助工具集 — 基于 PySide6 的 Windows 桌面应用。
+电商运营辅助工具集 — 基于 PySide6 的 Windows 桌面应用。专为唯品会/淘宝电商运营设计，涵盖商品图片采集、图片处理、PDF 编辑、ERP 资料导出、尺码表处理、文件管理等日常高频操作。
 
 ## 功能
 
 | 功能 | 说明 |
 |------|------|
-| **商品图片下载** | 通过 Playwright 浏览器自动化，下载淘宝商品主图/SKU图/详情图/视频 |
-| **一键抠图** | 基于 rembg + u2net.onnx 自动抠透明底图 |
-| **图片压缩** | JPEG/PNG 批量压缩到指定大小 |
-| **图片重命名** | 正则/序号批量重命名 |
-| **PDF 编辑** | 拆分、合并、提取页面 |
-| **ERP 商品资料导出** | 商品信息 → ERP条码对照表/批量新增商品资料/定价导入模板 |
-| **OCR 识别** | 本地 PaddleOCR / 云端百度OCR / PaddleX OCR |
-| **尺码映射** | 尺码标准化别名映射 |
+| **唯品批量找图** | 按款号批量从唯品会商品页采集主图/SKU图/详情图 |
+| **淘宝图片下载** | Playwright 浏览器自动化，下载淘宝商品主图/SKU图/详情图/视频，带防封策略 |
+| **图片压缩** | JPEG/PNG 批量压缩到指定大小（按尺寸或文件大小） |
+| **PDF 工具** | PDF 拆分、合并、提取页面 |
+| **批量抠图** | 基于 rembg + u2net.onnx 自动抠透明底图，支持批量处理 |
+| **批量尺码表录入** | 从图片/PDF 中识别尺码表并批量录入到 Excel 模板（支持 OCR） |
+| **批量模板 & ERP** | 批量生成 QA/配件明细/试穿报告/属性模板；导出 ERP 条码对照表/商品资料/定价导入 |
+| **批量重命名** | 正则匹配 / 序号编号 / 关键词批量重命名文件 |
+| **文件工具** | 文件夹批量创建（按 Excel 列层级嵌套）、文件提取汇总、图片分类归文件夹、文件清单导出、文件分发、供应商编码生成、重复文件清理 |
+| **操作历史** | 记录所有操作日志，方便回溯 |
 
 ## 安装
 
@@ -21,7 +23,7 @@
 
 - Windows 10/11
 - Python 3.9+
-- Google Chrome（用于商品图片下载）
+- Google Chrome（用于淘宝/唯品图片下载）
 
 ### 2. 安装依赖
 
@@ -71,6 +73,7 @@ python main.py
 │   └── init_github.py            # GitHub 仓库一键初始化
 └── toolbox/
     ├── core/                     # 核心逻辑
+    │   ├── batch_template.py     # 批量模板生成（QA/配件/试穿/属性）
     │   ├── browser.py            # Playwright 浏览器自动化
     │   ├── erp_product.py        # ERP 商品资料导出
     │   ├── ocr.py                # OCR 识别引擎
@@ -78,28 +81,26 @@ python main.py
     │   ├── size_mapping.py       # 尺码映射
     │   └── utils.py              # 工具函数
     ├── ui/                       # 界面
-    │   ├── main_window.pyw       # 主窗口
-    │   ├── compress_page.py      # 压缩页面
-    │   ├── rename_page.py        # 重命名页面
-    │   ├── history_page.py       # 历史记录
-    │   └── pages/                # 子页面
+    │   ├── main_window.pyw       # 主窗口（侧边栏导航）
+    │   ├── vip_image_finder_page.py  # 唯品批量找图
+    │   ├── compress_page.py      # 图片压缩
+    │   ├── rename_page.py        # 批量重命名
+    │   ├── file_tools_page.py    # 文件工具（创建/提取/分类/导出/分发/清重）
+    │   ├── history_page.py       # 操作历史
+    │   ├── anti_ban_dialog.py    # 防封设置
+    │   ├── path_drop.py          # 拖拽输入组件
+    │   └── pages/
+    │       └── batch_erp_page.py # 批量模板 & ERP 页面
+    ├── ocr_engine/               # OCR 引擎（需自行下载）
     ├── 表格模板/                  # Excel 模板文件
     ├── 尺码映射/                  # 尺码别名配置
     └── 参考数据/                  # 参考数据
 ```
 
-## 提交到 GitHub
-
-仓库已配置好，日常提交只需：
+## Git 日常使用
 
 ```bash
-git add .
-git commit -m "改了啥"
+git add -A
+git commit -m "修改说明"
 git push
-```
-
-如果是**全新项目**要推 GitHub：
-
-```bash
-python scripts/init_github.py --name 你的用户名/仓库名
 ```
