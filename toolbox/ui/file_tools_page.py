@@ -9,6 +9,7 @@ import openpyxl
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -16,8 +17,12 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
+    QProgressBar,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QTabWidget,
     QTextEdit,
@@ -1733,6 +1738,657 @@ class DedupCleanerTab(QWidget):
             self._duplicates = []
 
 
+# ── Tab 8: 批量合并表格 ──────────────────────────────────────────────
+class MergeTablesTab(QWidget):
+    """批量合并多个 Excel 表格，支持 3 种合并模式。"""
+    log_signal = Signal(str)
+    progress_signal = Signal(int)
+
+    MODE_BASIC = "basic"
+    MODE_MULTI_SHEET = "multi_sheet"
+    MODE_ADVANCED = "advanced"
+
+    ADV_SAME_SHEET = "same_sheet"
+    ADV_ALL_ONE = "all_one"
+
+    def __init__(self, config, parent=None):
+        super().__init__(parent)
+        self.config = config
+        self.log_signal.connect(self._append_log)
+        self.progress_signal.connect(self.progress_bar.setValue)
+        self._file_paths = []
+        self.init_ui()
+
+    def _append_log(self, msg):
+        self.log_area.append(msg)
+        bar = self.log_area.verticalScrollBar()
+        if bar:
+            bar.setValue(bar.maximum())
+
+    # ── 内嵌 QListWidget 子类：支持拖拽 .xlsx/.xls ──
+    class _DropFileList(QListWidget):
+        def __init__(self, parent_tab):
+            super().__init__()
+            self._pt = parent_tab
+            self.setAcceptDrops(True)
+
+        def dragEnterEvent(self, event):
+            if event.mimeData().hasUrls():
+                for url in event.mimeData().urls():
+                    p = url.toLocalFile()
+                    if p.lower().endswith(('.xlsx', '.xls')):
+                        event.acceptProposedAction()
+                        return
+            event.ignore()
+
+        def dragMoveEvent(self, event):
+            event.acceptProposedAction()
+
+        def dropEvent(self, event):
+            for url in event.mimeData().urls():
+                p = url.toLocalFile()
+                if p.lower().endswith(('.xlsx', '.xls')):
+                    self._pt._add_file(p)
+            event.acceptProposedAction()
+
+    def init_ui(self):
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        font = QFont("Microsoft YaHei", 10)
+
+        desc = QLabel(
+            "将多个 Excel 表格合并为一个文件，支持 3 种合并模式：\n"
+            "  • 基础合并：表头一致的表格纵向拼接到一个表\n"
+            "  • 多表合一：每个文件单独放到输出文件的一个 Sheet\n"
+            "  • 高级合并：处理多 Sheet 文件，支持按 Sheet 名归类或全部汇总"
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #666; font-size: 10px;")
+        layout.addWidget(desc)
+
+        # ── 文件列表 ──
+        file_group = QGroupBox("📂 待合并文件列表")
+        file_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
+        fg_layout = QVBoxLayout()
+        fg_layout.setSpacing(6)
+
+        self.file_list = self._DropFileList(self)
+        self.file_list.setAlternatingRowColors(True)
+        self.file_list.setMinimumHeight(120)
+        self.file_list.setMaximumHeight(200)
+        self.file_list.setStyleSheet("""
+            QListWidget { border: 1px solid #CFD8DC; border-radius: 4px;
+                          background: #FAFAFA; font-size: 10px; }
+            QListWidget::item { padding: 4px 8px; }
+            QListWidget::item:alternate { background: #F5F5F5; }
+        """)
+        # 恢复到上次的文件列表
+        saved = self.config.get("merge_tables_files", "")
+        if saved:
+            for p in saved.split(";"):
+                p = p.strip()
+                if p and os.path.exists(p):
+                    self._add_file(p)
+        fg_layout.addWidget(self.file_list)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        add_btn = QPushButton("➕ 添加文件")
+        add_btn.setFont(font)
+        add_btn.setStyleSheet("background:#E3F2FD;color:#1565C0;border:1px solid #90CAF9;border-radius:4px;padding:6px 14px;")
+        add_btn.clicked.connect(self._browse_files)
+        btn_row.addWidget(add_btn)
+
+        rem_btn = QPushButton("🗑️ 移除选中")
+        rem_btn.setFont(font)
+        rem_btn.setStyleSheet("background:#FFF3E0;color:#E65100;border:1px solid #FFCC80;border-radius:4px;padding:6px 14px;")
+        rem_btn.clicked.connect(self._remove_selected)
+        btn_row.addWidget(rem_btn)
+
+        cls_btn = QPushButton("🧹 清空列表")
+        cls_btn.setFont(font)
+        cls_btn.setStyleSheet("background:#FBE9E7;color:#BF360C;border:1px solid #FFAB91;border-radius:4px;padding:6px 14px;")
+        cls_btn.clicked.connect(self._clear_files)
+        btn_row.addWidget(cls_btn)
+
+        btn_row.addStretch()
+        fg_layout.addLayout(btn_row)
+        file_group.setLayout(fg_layout)
+        layout.addWidget(file_group)
+
+        # ── 合并模式 ──
+        mode_group = QGroupBox("🔀 合并模式")
+        mode_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
+        mg_layout = QVBoxLayout()
+        mg_layout.setSpacing(6)
+
+        self.mode_group = QButtonGroup(self)
+        saved_mode = self.config.get("merge_tables_mode", self.MODE_BASIC)
+
+        def _mk_mode(v, text):
+            rb = QRadioButton(text)
+            rb.setFont(font)
+            rb.setChecked(v == saved_mode)
+            self.mode_group.addButton(rb, self.mode_group.buttons().__len__())
+            # 存 value 到 radio 的 property
+            rb._mode_value = v
+            return rb
+
+        rb_basic = _mk_mode(self.MODE_BASIC,
+            "基础合并 — 表头一致的表格纵向追加数据行（推荐相同结构的报表）")
+        mg_layout.addWidget(rb_basic)
+
+        rb_multi = _mk_mode(self.MODE_MULTI_SHEET,
+            "多表合一 — 每个文件单独放在输出文件的一个 Sheet 中（Sheet 名=文件名）")
+        mg_layout.addWidget(rb_multi)
+
+        rb_adv = _mk_mode(self.MODE_ADVANCED,
+            "高级合并 — 处理多 Sheet 文件，支持按 Sheet 名归类或全部汇总到一个表")
+        mg_layout.addWidget(rb_adv)
+
+        self.mode_group.buttonClicked.connect(self._on_mode_changed)
+        mode_group.setLayout(mg_layout)
+        layout.addWidget(mode_group)
+
+        # ── 高级选项（仅高级模式可见） ──
+        self.adv_group = QGroupBox("⚙️ 高级选项")
+        self.adv_group.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
+        ag_layout = QVBoxLayout()
+        ag_layout.setSpacing(6)
+
+        self.adv_mode_group = QButtonGroup(self)
+        saved_adv = self.config.get("merge_tables_advanced_sub", self.ADV_SAME_SHEET)
+
+        def _mk_adv(v, text):
+            rb = QRadioButton(text)
+            rb.setFont(font)
+            rb.setChecked(v == saved_adv)
+            rb._adv_value = v
+            self.adv_mode_group.addButton(rb)
+            return rb
+
+        rb_same = _mk_adv(self.ADV_SAME_SHEET,
+            "同名 Sheet 合并到一起（如所有文件的 Sheet1→输出 Sheet1，Sheet2→输出 Sheet2）")
+        ag_layout.addWidget(rb_same)
+
+        rb_all = _mk_adv(self.ADV_ALL_ONE,
+            "所有 Sheet 全部合并为一个表（忽略 Sheet 名称，所有数据汇总到一个表）")
+        ag_layout.addWidget(rb_all)
+
+        self.adv_group.setLayout(ag_layout)
+        adv_visible = saved_mode == self.MODE_ADVANCED
+        self.adv_group.setVisible(adv_visible)
+        layout.addWidget(self.adv_group)
+
+        # ── 输出文件路径 ──
+        out_row = QHBoxLayout()
+        out_row.addWidget(QLabel("输出文件:"))
+        self.output_path = QLineEdit()
+        self.output_path.setPlaceholderText("选择保存合并结果的 .xlsx 文件路径...")
+        self.output_path.setText(self.config.get("merge_tables_output", ""))
+        out_row.addWidget(self.output_path, 1)
+        out_btn = QPushButton("浏览")
+        out_btn.setFont(font)
+        out_btn.setFixedWidth(80)
+        out_btn.clicked.connect(self._browse_output)
+        out_row.addWidget(out_btn)
+        layout.addLayout(out_row)
+
+        # ── 进度条 ──
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFixedHeight(28)
+        self.progress_bar.setFormat("%v / %m 个文件")
+        self.progress_bar.setStyleSheet("""
+            QProgressBar { border: 1px solid #B2DFDB; border-radius: 4px;
+                           text-align: center; background: #E0F2F1; }
+            QProgressBar::chunk { background-color: #00897B; border-radius: 3px; }
+        """)
+        layout.addWidget(self.progress_bar)
+
+        # ── 开始按钮 ──
+        self.run_btn = QPushButton("▶️ 开始合并")
+        self.run_btn.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
+        self.run_btn.setFixedHeight(38)
+        self.run_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #00838F; color: white; border: none;
+                border-radius: 6px; padding: 8px 20px;
+            }
+            QPushButton:hover { background-color: #00695C; }
+            QPushButton:disabled { background-color: #B2DFDB; color: #E0F2F1; }
+        """)
+        self.run_btn.clicked.connect(self._start)
+        layout.addWidget(self.run_btn)
+
+        # ── 日志 ──
+        self.log_area = QTextEdit()
+        self.log_area.setReadOnly(True)
+        self.log_area.setMaximumHeight(200)
+        self.log_area.setStyleSheet("font-family: Consolas; font-size: 9px; background: #FAFAFA;")
+        layout.addWidget(self.log_area)
+        layout.addStretch()
+        self.setLayout(layout)
+
+    # ========== 辅助方法 ==========
+
+    def _get_mode(self):
+        for btn in self.mode_group.buttons():
+            if btn.isChecked():
+                return btn._mode_value
+        return self.MODE_BASIC
+
+    def _get_adv_sub(self):
+        for btn in self.adv_mode_group.buttons():
+            if btn.isChecked():
+                return btn._adv_value
+        return self.ADV_SAME_SHEET
+
+    def _on_mode_changed(self):
+        is_adv = self._get_mode() == self.MODE_ADVANCED
+        self.adv_group.setVisible(is_adv)
+
+    def _add_file(self, path):
+        """添加文件到列表（去重）"""
+        path = os.path.abspath(path)
+        for i in range(self.file_list.count()):
+            if self.file_list.item(i).data(Qt.UserRole) == path:
+                return
+        item = QListWidgetItem(os.path.basename(path))
+        item.setData(Qt.UserRole, path)
+        item.setToolTip(path)
+        self.file_list.addItem(item)
+
+    def _browse_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "选择 Excel 文件", "", "Excel (*.xlsx *.xls);;所有文件 (*)")
+        for p in paths:
+            self._add_file(p)
+
+    def _remove_selected(self):
+        for item in self.file_list.selectedItems():
+            self.file_list.takeItem(self.file_list.row(item))
+
+    def _clear_files(self):
+        self.file_list.clear()
+
+    def _browse_output(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存合并结果", "合并结果.xlsx", "Excel (*.xlsx)")
+        if path:
+            self.output_path.setText(path)
+
+    def _get_file_paths(self):
+        paths = []
+        for i in range(self.file_list.count()):
+            p = self.file_list.item(i).data(Qt.UserRole)
+            if p:
+                paths.append(p)
+        return paths
+
+    # ========== 开始合并 ==========
+
+    def _start(self):
+        files = self._get_file_paths()
+        if len(files) < 2:
+            QMessageBox.warning(self, "提示", "请至少添加 2 个 Excel 文件")
+            return
+
+        output = self.output_path.text().strip()
+        if not output:
+            QMessageBox.warning(self, "提示", "请选择输出文件路径")
+            return
+        if not output.lower().endswith('.xlsx'):
+            output += '.xlsx'
+            self.output_path.setText(output)
+
+        mode = self._get_mode()
+        adv_sub = self._get_adv_sub() if mode == self.MODE_ADVANCED else ""
+
+        # 保存配置
+        self.config["merge_tables_files"] = ";".join(files)
+        self.config["merge_tables_mode"] = mode
+        self.config["merge_tables_advanced_sub"] = adv_sub
+        self.config["merge_tables_output"] = output
+        save_config(self.config)
+
+        self.run_btn.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setMaximum(len(files))
+        self.progress_bar.setValue(0)
+        self.log_area.clear()
+        self.log_signal.emit(f"合并模式: {mode}")
+        if mode == self.MODE_ADVANCED:
+            self.log_signal.emit(f"高级子选项: {adv_sub}")
+        self.log_signal.emit(f"输出文件: {output}\n")
+
+        threading.Thread(
+            target=self._do_merge,
+            args=(files, output, mode, adv_sub),
+            daemon=True,
+        ).start()
+
+    def _do_merge(self, files, output, mode, adv_sub):
+        try:
+            if mode == self.MODE_BASIC:
+                self._merge_basic(files, output)
+            elif mode == self.MODE_MULTI_SHEET:
+                self._merge_multi_sheet(files, output)
+            elif mode == self.MODE_ADVANCED:
+                if adv_sub == self.ADV_SAME_SHEET:
+                    self._merge_advanced_same_sheet(files, output)
+                else:
+                    self._merge_advanced_all_one(files, output)
+        except Exception as e:
+            self.log_signal.emit(f"\n[异常] {e}")
+            import traceback
+            self.log_signal.emit(traceback.format_exc())
+        finally:
+            self.run_btn.setEnabled(True)
+            self.progress_bar.setVisible(False)
+
+    # ========== 模式 1: 基础合并 ==========
+
+    def _merge_basic(self, files, output):
+        """表头一致的表格纵向追加"""
+        wb_out = openpyxl.Workbook()
+        ws_out = wb_out.active
+        ws_out.title = "合并结果"
+        canonical_headers = None
+        current_row = 1
+        total_rows = 0
+        skip_warnings = []
+
+        for idx, fpath in enumerate(files):
+            fname = os.path.basename(fpath)
+            try:
+                wb = openpyxl.load_workbook(fpath, read_only=True)
+                ws = wb.active
+                # 读表头
+                hrow = []
+                for cell in next(ws.iter_rows(max_row=1, values_only=True)):
+                    hrow.append(str(cell).strip() if cell is not None else '')
+                if not hrow or all(v == '' for v in hrow):
+                    self.log_signal.emit(f"  [跳过] {fname}: 空表或表头为空")
+                    wb.close()
+                    self.progress_signal.emit(idx + 1)
+                    continue
+
+                if canonical_headers is None:
+                    canonical_headers = hrow
+                    # 写表头
+                    for ci, h in enumerate(canonical_headers, 1):
+                        ws_out.cell(row=1, column=ci, value=h)
+                    current_row = 2
+
+                # 校验表头一致性
+                mismatch = len(hrow) != len(canonical_headers)
+                if not mismatch:
+                    for a, b in zip(hrow, canonical_headers):
+                        if a != b:
+                            mismatch = True
+                            break
+
+                if mismatch:
+                    msg = f"  [警告] {fname}: 表头与首文件不一致（{len(canonical_headers)}列 vs {len(hrow)}列），按位置映射"
+                    self.log_signal.emit(msg)
+                    skip_warnings.append(f"{fname} 表头不一致")
+
+                # 复制数据行
+                count = 0
+                for data_row in ws.iter_rows(min_row=2, values_only=True):
+                    if mismatch:
+                        # 按位置映射（少的列填空，多的截断）
+                        vals = []
+                        for ci in range(len(canonical_headers)):
+                            vals.append(data_row[ci] if ci < len(data_row) else None)
+                    else:
+                        vals = list(data_row)
+                    for ci, v in enumerate(vals):
+                        ws_out.cell(row=current_row, column=ci + 1, value=v)
+                    current_row += 1
+                    count += 1
+
+                self.log_signal.emit(f"  [合并] {fname}: {count} 行数据")
+                total_rows += count
+                wb.close()
+
+            except Exception as e:
+                self.log_signal.emit(f"  [错误] {fname}: {e}")
+            self.progress_signal.emit(idx + 1)
+
+        wb_out.save(output)
+        wb_out.close()
+        self.log_signal.emit(f"\n✓ 合并完成! 共 {len(self._get_file_paths())} 个文件, {total_rows} 行数据 → {os.path.basename(output)}")
+        if skip_warnings:
+            self.log_signal.emit(f"  有 {len(skip_warnings)} 个文件表头不一致，请检查结果")
+
+    # ========== 模式 2: 多表合一 ==========
+
+    def _sanitize_sheet_name(self, name, used_names):
+        """将文件名转为合法 Sheet 名（截断 31 字符，替换非法字符，去重）"""
+        # 替换 Excel 非法字符
+        raw = re.sub(r'[\[\]:*?/\\]', '_', name)
+        raw = raw[:31] if raw else "Sheet"
+        if not raw:
+            raw = "Sheet"
+        # 去重
+        base = raw
+        n = 2
+        while raw in used_names:
+            raw = f"{base[:27]}_{n}"
+            n += 1
+        used_names.add(raw)
+        return raw
+
+    def _merge_multi_sheet(self, files, output):
+        """每个文件一个 Sheet"""
+        wb_out = openpyxl.Workbook()
+        # 删默认 sheet
+        wb_out.remove(wb_out.active)
+        used_names = set()
+        total_sheets = 0
+
+        for idx, fpath in enumerate(files):
+            fname = os.path.basename(fpath)
+            try:
+                wb = openpyxl.load_workbook(fpath, read_only=True)
+                ws_src = wb.active
+                # Sheet 名
+                raw_name = os.path.splitext(fname)[0]
+                sheet_name = self._sanitize_sheet_name(raw_name, used_names)
+                ws_out = wb_out.create_sheet(sheet_name)
+
+                row_count = 0
+                for row_data in ws_src.iter_rows(values_only=True):
+                    for ci, v in enumerate(row_data):
+                        ws_out.cell(row=row_count + 1, column=ci + 1, value=v)
+                    row_count += 1
+
+                self.log_signal.emit(f"  [多表] {fname} → Sheet「{sheet_name}」({row_count} 行)")
+                total_sheets += 1
+                wb.close()
+            except Exception as e:
+                self.log_signal.emit(f"  [错误] {fname}: {e}")
+            self.progress_signal.emit(idx + 1)
+
+        wb_out.save(output)
+        wb_out.close()
+        self.log_signal.emit(f"\n✓ 合并完成! 共 {total_sheets} 个 Sheet → {os.path.basename(output)}")
+
+    # ========== 模式 3a: 高级-同名 Sheet 合并 ==========
+
+    def _merge_advanced_same_sheet(self, files, output):
+        """同名 Sheet 合并到一起"""
+        # 第一遍扫描：收集所有 Sheet 名及其对应的文件+sheet索引
+        sheet_map = {}  # {name: [(fpath, sheet_idx), ...]}
+        for fpath in files:
+            try:
+                wb = openpyxl.load_workbook(fpath, read_only=True)
+                for si, sname in enumerate(wb.sheetnames):
+                    sheet_map.setdefault(sname, []).append((fpath, si))
+                wb.close()
+            except Exception as e:
+                self.log_signal.emit(f"  [跳过] {os.path.basename(fpath)}: {e}")
+
+        if not sheet_map:
+            self.log_signal.emit("[错误] 未读取到任何 Sheet")
+            return
+
+        for sname in sorted(sheet_map.keys()):
+            flist = sheet_map[sname]
+            self.log_signal.emit(f"  [扫描] Sheet「{sname}」出现在 {len(flist)} 个文件中")
+
+        # 输出
+        wb_out = openpyxl.Workbook()
+        wb_out.remove(wb_out.active)
+        used_sheets = set()
+        total_all = 0
+
+        for sname, flist in sorted(sheet_map.items()):
+            out_sname = self._sanitize_sheet_name(sname, used_sheets)
+            ws_out = wb_out.create_sheet(out_sname)
+            canonical_headers = None
+            current_row = 1
+            sheet_total = 0
+
+            for fpath, si in flist:
+                fname = os.path.basename(fpath)
+                try:
+                    wb = openpyxl.load_workbook(fpath, read_only=True)
+                    ws_src = wb.worksheets[si]
+
+                    # 读表头
+                    hrow = []
+                    for cell in next(ws_src.iter_rows(max_row=1, values_only=True)):
+                        hrow.append(str(cell).strip() if cell is not None else '')
+                    if not hrow or all(v == '' for v in hrow):
+                        wb.close()
+                        continue
+
+                    if canonical_headers is None:
+                        canonical_headers = hrow
+                        for ci, h in enumerate(canonical_headers, 1):
+                            ws_out.cell(row=1, column=ci, value=h)
+                        current_row = 2
+
+                    # 检查表头（同基础合并宽松处理）
+                    mismatch = len(hrow) != len(canonical_headers)
+                    if not mismatch:
+                        for a, b in zip(hrow, canonical_headers):
+                            if a != b:
+                                mismatch = True
+                                break
+
+                    count = 0
+                    for data_row in ws_src.iter_rows(min_row=2, values_only=True):
+                        if mismatch:
+                            vals = [data_row[ci] if ci < len(data_row) else None
+                                    for ci in range(len(canonical_headers))]
+                        else:
+                            vals = list(data_row)
+                        for ci, v in enumerate(vals):
+                            ws_out.cell(row=current_row, column=ci + 1, value=v)
+                        current_row += 1
+                        count += 1
+
+                    self.log_signal.emit(f"    [{fname}] 第{si+1}个Sheet「{sname}」: {count} 行")
+                    sheet_total += count
+                    wb.close()
+                except Exception as e:
+                    self.log_signal.emit(f"    [错误] {fname}: {e}")
+
+            self.log_signal.emit(f"  → Sheet「{out_sname}」合并完成: {sheet_total} 行")
+            total_all += sheet_total
+
+        wb_out.save(output)
+        wb_out.close()
+        self.log_signal.emit(f"\n✓ 合并完成! 共 {len(sheet_map)} 个 Sheet 组, {total_all} 行数据 → {os.path.basename(output)}")
+
+    # ========== 模式 3b: 高级-全部合并为一个表 ==========
+
+    def _merge_advanced_all_one(self, files, output):
+        """所有文件的所有 Sheet 全部合并到一个表"""
+        # 第一遍：收集所有唯一的列名
+        all_columns = ["来源文件", "来源Sheet"]
+        col_order = []  # 保持列的出现顺序
+        col_set = set(all_columns)
+        sheet_headers = []  # [(fpath, sname, headers, sheet_idx), ...]
+
+        for fpath in files:
+            try:
+                wb = openpyxl.load_workbook(fpath, read_only=True)
+                fname = os.path.basename(fpath)
+                for si, sname in enumerate(wb.sheetnames):
+                    ws = wb.worksheets[si]
+                    hrow = []
+                    for cell in next(ws.iter_rows(max_row=1, values_only=True)):
+                        h = str(cell).strip() if cell is not None else ''
+                        hrow.append(h)
+                        if h and h not in col_set:
+                            col_set.add(h)
+                            col_order.append(h)
+                    sheet_headers.append((fpath, sname, hrow, si))
+                wb.close()
+            except Exception as e:
+                self.log_signal.emit(f"  [跳过] {os.path.basename(fpath)}: {e}")
+
+        if not sheet_headers:
+            self.log_signal.emit("[错误] 未读取到任何数据")
+            return
+
+        # 完整表头：固定的来源列 + 收集到的列
+        full_headers = all_columns + col_order
+        hdr_index = {h: i for i, h in enumerate(full_headers)}
+
+        # 输出
+        wb_out = openpyxl.Workbook()
+        ws_out = wb_out.active
+        ws_out.title = "全部合并"
+
+        for ci, h in enumerate(full_headers, 1):
+            ws_out.cell(row=1, column=ci, value=h)
+
+        current_row = 2
+        total_rows = 0
+
+        for fpath, sname, hrow, si in sheet_headers:
+            fname = os.path.basename(fpath)
+            try:
+                wb = openpyxl.load_workbook(fpath, read_only=True)
+                ws = wb.worksheets[si]
+                # 建立该 sheet 的列索引映射
+                col_map = {}
+                for ci, h in enumerate(hrow):
+                    if h and h in hdr_index:
+                        col_map[ci] = hdr_index[h]
+
+                count = 0
+                for data_row in ws.iter_rows(min_row=2, values_only=True):
+                    row_vals = [None] * len(full_headers)
+                    row_vals[hdr_index["来源文件"]] = fname
+                    row_vals[hdr_index["来源Sheet"]] = sname
+                    for sci, v in enumerate(data_row):
+                        if sci in col_map:
+                            row_vals[col_map[sci]] = v
+                    for ci, v in enumerate(row_vals):
+                        ws_out.cell(row=current_row, column=ci + 1, value=v)
+                    current_row += 1
+                    count += 1
+
+                self.log_signal.emit(f"  [{fname}] Sheet「{sname}」: {count} 行")
+                total_rows += count
+                wb.close()
+            except Exception as e:
+                self.log_signal.emit(f"  [错误] {fname}/{sname}: {e}")
+
+        wb_out.save(output)
+        wb_out.close()
+        self.log_signal.emit(f"\n✓ 合并完成! 共 {len(sheet_headers)} 个 Sheet, {total_rows} 行, {len(full_headers)} 列 → {os.path.basename(output)}")
+
+
 # ── 主页面：文件工具 ──────────────────────────────────────────────
 class FileToolsPage(QWidget):
     def __init__(self, config, parent=None):
@@ -1839,7 +2495,7 @@ class FileToolsPage(QWidget):
         title.setStyleSheet("color: #1565C0;")
         layout.addWidget(title)
 
-        desc = QLabel("文件夹批量操作 & 表格驱动工具集，涵盖建文件夹、提取汇总、分发、清单导出等日常办公高频操作")
+        desc = QLabel("文件夹批量操作 & 表格驱动工具集，涵盖建文件夹、提取汇总、表格合并、分发、清单导出等日常办公高频操作")
         desc.setWordWrap(True)
         desc.setFont(QFont("Microsoft YaHei", 10))
         desc.setStyleSheet("color: #666;")
@@ -1855,6 +2511,7 @@ class FileToolsPage(QWidget):
         self.tab5 = FileDistributeTab(self.config)
         self.tab6 = SupplierCodeTab(self.config)
         self.tab7 = DedupCleanerTab(self.config)
+        self.tab8 = MergeTablesTab(self.config)
 
         # 包裹到 QScrollArea
         for tab, name in [
@@ -1865,6 +2522,7 @@ class FileToolsPage(QWidget):
             (self.tab5, "📨 批量分发文件"),
             (self.tab6, "🔖 供应商款号提取"),
             (self.tab7, "🧹 清理重复文件"),
+            (self.tab8, "📊 批量合并表格"),
         ]:
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
